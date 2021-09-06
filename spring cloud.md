@@ -799,3 +799,228 @@ public class TurbineApplication {
 （4）测试
 
 浏览器访问 http://localhost:8031/hystrix 展示HystrixDashboard。并在url位置输入	，动态根据turbine.stream数据展示多个微服务的监控数据
+
+### 熔断器的隔离策略
+
+微服务使用Hystrix熔断器实现了服务的自动降级，让微服务具有自我保护的能力，提升了系统的稳定性，也较好的解决了雪崩效应。**其使用方式目前支持两种策略**
+
+- 线程池隔离策略：使用一个线程池来存储当前的请求，线程池对请求作处理，设置任务返回处理超时时间，堆积的请求堆积入线程池队列。这种方式需要为每个依赖的服务申请线程池，有一定的资源消耗，好处是可以应对突发流量（流量洪峰来临时，处理不完可将数据存储到线程池里慢慢处理）
+- 信号量隔离策略：使用一个原子计数器（或信号量）来记录当前有多少个线程在运行，请求来先判断计数器的数值，若超过设置的最大线程个数则丢弃该类型的新请求，若不超过则执行计数操作请求来计数器+1，请求返回计数器-1。这种方式是严格的控制线程且立即返回模式，无法应对突发流量（流量洪峰来临时，处理的线程超过数量，其他的请求会直接返回，不继续去请求依赖的服务）
+
+##### 线程池和信号量两种策略功能支持对比如下：
+
+
+
+![企业微信20210905175706](/Users/apple/Desktop/企业微信20210905175706.png)
+
+- hystrix.command.default.execution.isolation.strategy：配置隔离策略
+  - ExecutionIsolationStrategy.SEMAPHORE 信号量隔离
+  - ExecutionIsolationStrategy.THREAD 线程池隔离
+- hystrix.command.default.execution.isolation.maxConcurrentRequests: 最大信号量上限
+
+
+
+# 8.微服务网关概述
+
+在学习完前面的知识后，微服务架构已经初具雏形。但还有一些问题：不同的微服务一般会有不同的网络地址，客户端在访问这些微服务时必须记住几十甚至几百个地址，这对于客户端方来说太复杂也难以维护。如下图![企业微信20210906092424](/Users/apple/Desktop/企业微信20210906092424.png)
+
+如果让客户端直接与各个微服务通讯，可能会有很多问题：
+
+- 客户端会请求多个不同的服务，需要维护不同的请求地址，增加开发难度
+- 在某些场景下存在跨域请求的问题
+- 加大身份认证的难度，每个微服务需要独立认证
+
+因此，我们需要一个微服务网关，介于客户端与服务器之间的中间层，所有的外部请求都会先经过微服务网关。客户端只需要与网关交互，只知道一个网关地址即可，这样简化了开发还有以下优点：
+
+​	1、易于监控
+
+​	2、易于认证
+
+​	3、减少了客户端与各个微服务之间的交互次数
+
+![企业微信20210906093455](/Users/apple/Desktop/企业微信20210906093455.png)
+
+## 8.1服务网关的概念
+
+### 8.1.1 什么是微服务网关
+
+​	API网关是一个服务器，是系统对外的唯一入口。API网关封装了系统内部架构，为每个客户端提供一个定制的API。API网关方式的核心要点是，所有的客户端和消费端都通过统一的网关接入微服务，在网关层处理所有的非业务功能。通常，网关也是提供REST/HTTP的访问API。服务端通过API-GW注册和管理服务
+
+### 8.1.2 作用和应用场景
+
+网关具有的职责，如身份验证、监控、负载均衡、缓存、请求分片与管理、静态响应处理。当然，最主要的职责还是与“外界联系”。
+
+## 8.2 常见的API网关实现方式
+
+- Kong
+
+  基于Nginx+Lua开发，性能高，稳定，有多个可用的插件（限流，鉴权等）可以开箱即用。
+
+  问题：只支持Http协议；二次开发，自由扩展困难；提供管理API，缺乏更易用的管控，配置方式。
+
+- Zuul
+
+  Netflix开源，功能丰富，使用Java开发，易于二次开发；需要运行在web容器中，如tomcat。
+
+  问题：缺乏管控，无法动态配置；依赖组件较多；处理Http请求依赖的是web容器，性能不如Nginx
+
+- SpringCloud Gateway
+
+  SpringCloud提供 的网关服务
+
+## Zuul网关
+
+#### 介绍
+
+Zuul是Netflix开源的微服务网关，它可以和Eureka、Ribbon、Hystrix等组件配合使用，Zuul组件的核心是一系列的过滤器，这些过滤器可以完成以下功能：
+
+- 动态路由：动态请求路由到不同后端集群
+- 压力测试：逐渐增加指向集群的流量，以了解性能
+- 负载分配：为每一种负载类型分配对应容量，并弃用超出限定值的请求
+- 静态响应处理：边缘位置进行响应，避免转发到内部集群
+- 身份认证和安全：识别每一个资源的验证请求，并拒绝那些不符的请求。SpringCloud对Zuul进行了整合和增强。
+
+
+
+#### 搭建zuul网关服务器
+
+##### （1）创建工程导入依赖
+
+在idea中创建Zuul网关工程shop-zuul-server,并添加相应依赖
+
+```xml
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-zuul</artifactId>
+        </dependency>
+```
+
+##### （2）配置启动类 ，开启网关服务器功能
+
+```java
+// 开启zuul网关功能
+@EnableZuulProxy
+public class ZuulServerApplication 
+```
+
+
+
+##### （3）配置文件
+
+```yml
+server:
+  port: 8080
+  tomcat:
+    max-threads: 10
+spring:
+  application:
+    name: zuul-server
+```
+
+
+
+#### 路由
+
+路由：根据请求的URL，将请求分配到对应的微服务中进行处理。
+
+##### 基础路由配置
+
+```yml
+# 路由配置
+zuul:
+  routes:
+    # 以商品微服务举例
+    product-service: # 路由id，随便写
+      path: /product-service/** # 映射路径  #localhost:8080/product-service/dadsawdadw
+      url: http://localhost:9001 #映射路径对应的实际微服务url地址
+```
+
+##### 面向服务的路由
+
+（1）添加eureka的依赖
+
+```xml
+ <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+        </dependency>
+```
+
+
+
+（2）开启eureka的客户端注册发现
+
+```java
+@EnableEurekaClient
+public class ZuulServerApplication 
+```
+
+
+
+（3）在zuul网关服务中配置eureka的注册中心相关信息
+
+```yml
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:9000/eureka/
+  instance:
+    prefer-ip-address: true # 使用ip地址注册
+```
+
+
+
+（4）修改路由中的映射配置
+
+```yml
+zuul:
+  routes:
+    # 以商品微服务举例
+    product-service: # 路由id，随便写
+      path: /product-service/** # 映射路径  #localhost:8080/product-service/dadsawdadw
+#      url: http://localhost:9001 #映射路径对应的实际微服务url地址
+      serviceId: product-service # 配置转发的微服务的名称
+```
+
+##### 简化路由配置
+
+```yml
+zuul:
+  routes:
+    # 以商品微服务举例
+#    product-service: # 路由id，随便写
+#      path: /product-service/** # 映射路径  #localhost:8080/product-service/dadsawdadw
+##      url: http://localhost:9001 #映射路径对应的实际微服务url地址
+#      serviceId: product-service # 配置转发的微服务的名称
+      # 如果路由id和对应的微服务的serviceId一致的话
+      product-service: /product-service/**
+      # zuul中的默认路由配置
+      # 如果当前的微服务名称为 service-product，默认的请求映射路径 /service-product/**
+```
+
+
+
+#### 过滤器
+
+![企业微信20210906144923](/Users/apple/Desktop/企业微信20210906144923.png)
+
+通过之前的学习，我们得知Zuul它包含了两个核心功能：对请求的**路由和过滤**。其中路由功能负责将外部请求转发到具体的微服务实例上，是实现外部访问统一入口的基础；而过滤器功能则负责对请求的处理过程进行干预，是实现请求校验、服务聚合等功能的基础。其实，路由功能在真正运行时，它的路由映射和请求转发同样也由几个不同的过滤器完成的。所以，过滤器可以说是Zuul实现API网关功能最为核心的部件，每一个进入Zuul的HTTP请求都会经过一系列的过滤器处理链得到请求响应并返回给客户端。
+
+那么接下来，我们重点学习的就是Zuul的第二个核心功能：**过滤器**。
+
+#### ZuulFilter简介
+
+Zuul中的过滤器跟我们之前使用的javax.servlet.Filter不一样，javax.servlet.Filter只有一种类型，可以通过配置urlPatterns来拦截对应的请求。而Zuul中的过滤器总共有4种类型，且每种类型都有对应的使用场景。
+
+​	1.**PRE**：这种过滤器在请求被路由之前调用。我们可利用这种过滤器实现身份验证、在集群中选择请求的微服务、记录调试信息等。
+
+​	2.**ROUTING**：这种过滤器将请求路由到微服务。这种过滤器用于构建发送给微服务的请求，并使用Apache HttpClient或Netflix Ribbon请求微服务。
+
+​	3.**POST**：这种过滤器在路由到微服务以后执行。这种过滤器可用来为响应添加标准的HTTP Header、收集统计信息和指标、将响应从微服务发送给客户端等。
+
+​	4.**ERROR**：在其他阶段发送错误时执行该过滤器。
+
+Zuul提供了自定义过滤器的功能实现起来也十分简单，只需要编写一个类去实现zuul提供的接口
+
+#### 内部源码
+
